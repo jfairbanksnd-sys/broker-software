@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import type { Load } from '@broker/shared/src/types';
 import { formatTimeWindow } from '@broker/shared/src/time';
 
@@ -33,8 +33,12 @@ function gpsLabel(minutes: number | null) {
 }
 
 export function LoadCard({ load }: { load: Load }) {
+  const router = useRouter();
+
   const riskLine =
-    load.status === 'green' ? statusBadge(load.status) : `${statusBadge(load.status)} • ${load.riskReason}`;
+    load.status === 'green'
+      ? statusBadge(load.status)
+      : `${statusBadge(load.status)} • ${load.riskReason}`;
 
   const pickupWindow = formatTimeWindow(load.pickupWindowStartISO, load.pickupWindowEndISO);
 
@@ -42,10 +46,24 @@ export function LoadCard({ load }: { load: Load }) {
   const textHref = load.textLink ?? `sms:${load.carrierPhone}`;
   const mapHref = load.mapLink ?? '#';
 
+  function goToLoad() {
+    router.push(`/loads/${encodeURIComponent(load.id)}`);
+  }
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      goToLoad();
+    }
+  }
+
   return (
-    <Link
-      href={`/loads/${encodeURIComponent(load.id)}`}
-      className="group block rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:border-slate-300 hover:shadow-md"
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={goToLoad}
+      onKeyDown={onKeyDown}
+      className="group block cursor-pointer rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:border-slate-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-slate-300"
     >
       <div className="flex">
         <div className={`w-2 rounded-l-2xl ${statusStripClass(load.status)}`} />
@@ -108,6 +126,6 @@ export function LoadCard({ load }: { load: Load }) {
           </div>
         </div>
       </div>
-    </Link>
+    </div>
   );
 }
