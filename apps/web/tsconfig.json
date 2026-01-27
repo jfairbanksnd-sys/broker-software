@@ -2,15 +2,37 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "jsx": "preserve",
-    "plugins": [{ "name": "next" }],
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
     "baseUrl": ".",
     "paths": {
-      "@broker/ui": ["../../packages/ui/src/index.ts"],
-      "@broker/ui/*": ["../../packages/ui/src/*"],
-      "@broker/shared": ["../../packages/shared/src/index.ts"],
-      "@broker/shared/*": ["../../packages/shared/src/*"]
-    }
+      "@broker/ui": [
+        "../../packages/ui/src/index.ts"
+      ],
+      "@broker/ui/*": [
+        "../../packages/ui/src/*"
+      ],
+      "@broker/shared": [
+        "../../packages/shared/src/index.ts"
+      ],
+      "@broker/shared/*": [
+        "../../packages/shared/src/*"
+      ]
+    },
+    "allowJs": true,
+    "incremental": true,
+    "isolatedModules": true
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }
