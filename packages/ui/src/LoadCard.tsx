@@ -3,8 +3,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { KeyboardEvent } from 'react';
-import { type EvaluatedLoad, type Load, type LoadStatus } from '@broker/shared';
-import { formatInTimeZone, timeZoneForCityState, tzAbbrevForCityState } from '@broker/shared';
+import {
+  type EvaluatedLoad,
+  type Load,
+  type LoadStatus,
+  timeZoneForCityState,
+} from '@broker/shared';
 
 type LoadLike = Load | EvaluatedLoad;
 
@@ -48,14 +52,22 @@ function statusBadge(status: LoadStatus) {
 
 function gpsLabel(minutes: number | null | undefined) {
   const m =
-    typeof minutes === 'number' && Number.isFinite(minutes) ? Math.max(0, Math.floor(minutes)) : null;
+    typeof minutes === 'number' && Number.isFinite(minutes)
+      ? Math.max(0, Math.floor(minutes))
+      : null;
+
   if (m === null) return 'Last GPS: —';
   if (m < 1) return 'Last GPS: just now';
   return `Last GPS: ${m} min ago`;
 }
 
+/**
+ * Replace any ISO-8601 timestamps inside a message with the user's LOCAL time.
+ * (Hydration-safe because we only apply after mount.)
+ */
 function localizeIsoInText(text: string): string {
-  const isoRegex = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?Z\b/g;
+  const isoRegex =
+    /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?Z\b/g;
 
   return text.replace(isoRegex, (iso) => {
     const d = new Date(iso);
@@ -83,10 +95,66 @@ function getOptionalString(load: LoadLike, key: string): string | null {
   return typeof v === 'string' && v.trim() ? v.trim() : null;
 }
 
+function abbrForTimeZone(iso: string, timeZone: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      timeZoneName: 'short',
+    }).formatToParts(d);
+
+    return parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function formatInTz(iso: string, timeZone: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(d);
+}
+
+/**
+ * Window format:
+ * "Tue, Jan 27, 12:12 AM → Tue, Jan 27, 2:12 AM PST"
+ * (TZ shown once at the end.)
+ */
+function formatWindowInTz(
+  startIso: string | null,
+  endIso: string | null,
+  timeZone: string
+): string {
+  if (!startIso && !endIso) return '—';
+
+  if (startIso && !endIso) {
+    const tz = abbrForTimeZone(startIso, timeZone);
+    return `${formatInTz(startIso, timeZone)} → —${tz ? ` ${tz}` : ''}`;
+  }
+
+  if (!startIso && endIso) {
+    const tz = abbrForTimeZone(endIso, timeZone);
+    return `— → ${formatInTz(endIso, timeZone)}${tz ? ` ${tz}` : ''}`;
+  }
+
+  const tz = abbrForTimeZone(startIso!, timeZone);
+  return `${formatInTz(startIso!, timeZone)} → ${formatInTz(endIso!, timeZone)}${tz ? ` ${tz}` : ''}`;
+}
+
 export function LoadCard({ load }: { load: LoadLike }) {
   const router = useRouter();
 
-  // prevent hydration mismatch: no localized date/time until mounted
+  // Prevent hydration mismatch: no localized date/time until mounted
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -100,9 +168,17 @@ export function LoadCard({ load }: { load: LoadLike }) {
     return mounted ? localizeIsoInText(base) : base;
   }, [status, riskReason, mounted]);
 
-  // Infer time zones (MVP). Later you can override with explicit fields.
-  const originTz = timeZoneForCityState(load.originCityState) ?? 'America/Los_Angeles';
-  const destTz = timeZoneForCityState(load.destCityState) ?? 'America/New_York';
+  const browserTz = useMemo(() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles';
+    } catch {
+      return 'America/Los_Angeles';
+    }
+  }, []);
+
+  // Infer time zones from origin/destination (state -> IANA)
+  const originTz = timeZoneForCityState(load.originCityState) ?? browserTz;
+  const destTz = timeZoneForCityState(load.destCityState) ?? browserTz;
 
   const pickupWindow = useMemo(() => {
     if (!mounted) return '—';
@@ -167,7 +243,9 @@ export function LoadCard({ load }: { load: LoadLike }) {
                 <span className="font-medium text-slate-700">Carrier:</span> {load.carrierName}
               </div>
 
-              <div className="mt-1 text-sm text-slate-600">{gpsLabel((load as any).lastGpsMinutesAgo)}</div>
+              <div className="mt-1 text-sm text-slate-600">
+                {gpsLabel((load as any).lastGpsMinutesAgo)}
+              </div>
             </div>
           </div>
 
@@ -206,7 +284,3 @@ export function LoadCard({ load }: { load: LoadLike }) {
     </div>
   );
 }
-function formatWindowInTz(pickupWindowStartISO: string, pickupWindowEndISO: string, originTz: string): any {
-  throw new Error('Function not implemented.');
-}
-

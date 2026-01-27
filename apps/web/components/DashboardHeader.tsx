@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import type { Load, EvaluatedLoad } from '@broker/shared';
-import { TimeZoneClocks } from '../components/TimeZoneClocks';
+import { TimeZoneClocks } from './TimeZoneClocks';
 
 type LoadLike = Load | EvaluatedLoad;
 
@@ -61,12 +61,15 @@ export function DashboardHeader({
             >
               {state.label}
             </div>
-
-            {/* 4 clocks */}
-            <TimeZoneClocks />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {/* 4 clocks (to the left of bell) */}
+            <div className="hidden md:block">
+              <TimeZoneClocks />
+            </div>
+
+            {/* Notifications bell */}
             <button
               type="button"
               aria-label="Notifications"
@@ -86,6 +89,7 @@ export function DashboardHeader({
               ) : null}
             </button>
 
+            {/* Profile icon (visual only per spec) */}
             <button
               type="button"
               aria-label="Profile"
@@ -112,6 +116,8 @@ export function DashboardHeader({
             className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-slate-300 focus:bg-white"
           />
         </div>
+
+        {/* If you want clocks visible on mobile too, remove the md:hidden wrapper above */}
       </div>
     </div>
   );

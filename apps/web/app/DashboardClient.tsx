@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   mockLoads,
@@ -14,6 +15,7 @@ import {
   saveSnapshots,
   type SnapshotMap,
   type Notification,
+  timeZoneForCityState
 } from '@broker/shared';
 
 import { DashboardHeader } from '../components/DashboardHeader';
@@ -51,9 +53,115 @@ function saveJson(key: string, value: unknown) {
   }
 }
 
+function localizeIsoInText(text: string): string {
+  const isoRegex =
+    /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?Z\b/g;
+
+  return text.replace(isoRegex, (iso) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(d);
+  });
+}
+
+// ===== ADD HERE: timezone-aware ISO replacement for notifications =====
+function tzAbbrevForTimeZone(iso: string, timeZone: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+
+  const parts = new Intl.DateTimeFormat(undefined, {
+    timeZone,
+    timeZoneName: 'short',
+  }).formatToParts(d);
+
+  return parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
+}
+
+function formatInTimeZoneWithAbbrev(iso: string, timeZone: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+
+  const base = new Intl.DateTimeFormat(undefined, {
+    timeZone,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(d);
+
+  const tz = tzAbbrevForTimeZone(iso, timeZone);
+  return tz ? `${base} ${tz}` : base;
+}
+
+function replaceIsoInTextUsingTimeZone(text: string, timeZone: string): string {
+  const isoRegex =
+    /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?Z\b/g;
+
+  return text.replace(isoRegex, (iso) => formatInTimeZoneWithAbbrev(iso, timeZone));
+}
+
+function pickTimeZoneForNotification(
+  n: { message: string },
+  load?: { originCityState: string; destCityState: string }
+): string {
+  const fallback = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  if (!load) return fallback;
+
+  // If the notif is delivery-ish, use DEST TZ, otherwise ORIGIN TZ
+  const msg = n.message.toLowerCase();
+  const isDelivery = msg.includes('delivery');
+
+  const tz = isDelivery
+    ? timeZoneForCityState(load.destCityState)
+    : timeZoneForCityState(load.originCityState);
+
+  return tz ?? fallback;
+}
+// ===== END ADD HERE =====
+
+function prettifyNotifCode(code: string): string {
+  const words = code
+    .toLowerCase()
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+  return words.join(' ');
+}
+
+function splitNotifMessage(
+  raw: string,
+  timeZone?: string
+): { codeLabel?: string; message: string } {
+  // matches: "PICKUP_WINDOW_SOON: Pickup window starts at 2026-...Z."
+  const m = raw.match(/^([A-Z0-9_]+):\s*(.*)$/);
+
+  const localize = (s: string) => {
+    if (timeZone) return replaceIsoInTextUsingTimeZone(s, timeZone);
+    return localizeIsoInText(s); // fallback = user's local tz
+  };
+
+  if (!m) return { message: localize(raw) };
+
+  return {
+    codeLabel: prettifyNotifCode(m[1]),
+    message: localize(m[2]),
+  };
+}
+
 export default function DashboardClient() {
   // IMPORTANT: mounted is the FIRST hook and we never conditionally add hooks later.
   const [mounted, setMounted] = useState(false);
+
+  const router = useRouter();
 
   const [search, setSearch] = useState('');
   const [snapshotsLoaded, setSnapshotsLoaded] = useState(false);
@@ -283,11 +391,23 @@ export default function DashboardClient() {
                       ? 'border-red-200 bg-red-50 text-red-900'
                       : 'border-amber-200 bg-amber-50 text-amber-900';
 
+                  // Find the load for this notification so we can infer pickup/delivery timezone
+                  const notifLoad = evaluatedAll.find((l) => l.id === n.loadId);
+
+                  // Choose TZ: pickup-ish => origin TZ, delivery-ish => dest TZ (fallback = user's TZ)
+                  const notifTz = pickTimeZoneForNotification(n, notifLoad);
+
+                  // Split "CODE: message" and localize any ISO timestamps using notifTz (adds PST/MST/CST/EST)
+                  const { codeLabel, message } = splitNotifMessage(n.message, notifTz);
+
                   return (
                     <button
                       key={n.id}
                       type="button"
-                      onClick={() => markOneRead(n.id)}
+                      onClick={() => {
+                        markOneRead(n.id);
+                        if (n.loadId) router.push(`/loads/${encodeURIComponent(n.loadId)}`);
+                      }}
                       className={`text-left rounded-2xl border p-3 transition hover:shadow-sm ${tone}`}
                     >
                       <div className="flex items-start justify-between gap-3">
@@ -297,7 +417,15 @@ export default function DashboardClient() {
                             <span className="text-slate-700">•</span>{' '}
                             <span className="font-mono">{n.loadId}</span>
                           </div>
-                          <div className="mt-1 text-sm">{n.message}</div>
+
+                          {codeLabel ? (
+                            <div className="mt-1 text-xs font-semibold tracking-wide text-slate-700">
+                              {codeLabel}
+                            </div>
+                          ) : null}
+
+                          <div className="mt-1 text-sm">{message}</div>
+
                           <div className="mt-1 text-xs text-slate-600">
                             {new Date(n.createdAtISO).toLocaleString()}
                           </div>
@@ -314,6 +442,7 @@ export default function DashboardClient() {
                     </button>
                   );
                 })
+
               )}
             </div>
           </section>

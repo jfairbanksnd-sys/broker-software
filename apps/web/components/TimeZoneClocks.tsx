@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
-type Clock = { label: string; tz: string };
+type ClockDef = { label: string; tz: string };
 
-const CLOCKS: Clock[] = [
+const CLOCKS: ClockDef[] = [
   { label: 'Pacific', tz: 'America/Los_Angeles' },
   { label: 'Mountain', tz: 'America/Denver' },
   { label: 'Central', tz: 'America/Chicago' },
@@ -12,41 +12,39 @@ const CLOCKS: Clock[] = [
 ];
 
 function formatClock(d: Date, timeZone: string) {
-  // Example: 9:41 PM
-  return new Intl.DateTimeFormat(undefined, {
+  // Example: "8:15 AM PST"
+  return new Intl.DateTimeFormat('en-US', {
     timeZone,
     hour: 'numeric',
     minute: '2-digit',
+    timeZoneName: 'short',
   }).format(d);
 }
 
 export function TimeZoneClocks() {
-  // Avoid hydration mismatch: don’t render live times until mounted
-  const [mounted, setMounted] = useState(false);
-  const [now, setNow] = useState<Date>(() => new Date());
+  const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
-    setMounted(true);
-    const id = window.setInterval(() => setNow(new Date()), 30_000);
+    const id = window.setInterval(() => setNow(new Date()), 60_000);
     return () => window.clearInterval(id);
   }, []);
 
-  const items = useMemo(() => {
+  const rows = useMemo(() => {
     return CLOCKS.map((c) => ({
       ...c,
-      time: mounted ? formatClock(now, c.tz) : '—',
+      value: formatClock(now, c.tz),
     }));
-  }, [mounted, now]);
+  }, [now]);
 
   return (
-    <div className="mt-3 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:gap-2">
-      {items.map((c) => (
+    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {rows.map((c) => (
         <div
           key={c.tz}
-          className="flex items-baseline justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2"
+          className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2"
         >
           <div className="text-xs font-semibold text-slate-600">{c.label}</div>
-          <div className="font-mono text-sm font-semibold text-slate-900">{c.time}</div>
+          <div className="mt-0.5 text-sm font-semibold text-slate-900">{c.value}</div>
         </div>
       ))}
     </div>

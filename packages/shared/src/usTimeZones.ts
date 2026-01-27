@@ -4,24 +4,64 @@ export type UsZoneKey = 'PT' | 'MT' | 'CT' | 'ET';
 
 const STATE_TO_ZONE: Record<string, UsZoneKey> = {
   // Pacific
-  WA: 'PT', OR: 'PT', CA: 'PT', NV: 'PT',
+  WA: 'PT',
+  OR: 'PT',
+  CA: 'PT',
+  NV: 'PT',
 
   // Mountain
-  ID: 'MT', MT: 'MT', WY: 'MT', UT: 'MT', CO: 'MT', NM: 'MT', AZ: 'MT',
+  ID: 'MT',
+  MT: 'MT',
+  WY: 'MT',
+  UT: 'MT',
+  CO: 'MT',
+  NM: 'MT',
+  AZ: 'MT',
 
   // Central
-  ND: 'CT', SD: 'CT', NE: 'CT', KS: 'CT', OK: 'CT', TX: 'CT',
-  MN: 'CT', IA: 'CT', MO: 'CT', AR: 'CT', LA: 'CT', WI: 'CT',
-  IL: 'CT', MS: 'CT', AL: 'CT',
+  ND: 'CT',
+  SD: 'CT',
+  NE: 'CT',
+  KS: 'CT',
+  OK: 'CT',
+  TX: 'CT',
+  MN: 'CT',
+  IA: 'CT',
+  MO: 'CT',
+  AR: 'CT',
+  LA: 'CT',
+  WI: 'CT',
+  IL: 'CT',
+  MS: 'CT',
+  AL: 'CT',
 
   // Eastern
-  MI: 'ET', IN: 'ET', OH: 'ET', KY: 'ET', TN: 'ET',
-  GA: 'ET', FL: 'ET', SC: 'ET', NC: 'ET', VA: 'ET', WV: 'ET',
-  PA: 'ET', NY: 'ET', NJ: 'ET', CT: 'ET', RI: 'ET', MA: 'ET',
-  VT: 'ET', NH: 'ET', ME: 'ET', MD: 'ET', DE: 'ET', DC: 'ET',
+  MI: 'ET',
+  IN: 'ET',
+  OH: 'ET',
+  KY: 'ET',
+  TN: 'ET',
+  GA: 'ET',
+  FL: 'ET',
+  SC: 'ET',
+  NC: 'ET',
+  VA: 'ET',
+  WV: 'ET',
+  PA: 'ET',
+  NY: 'ET',
+  NJ: 'ET',
+  CT: 'ET',
+  RI: 'ET',
+  MA: 'ET',
+  VT: 'ET',
+  NH: 'ET',
+  ME: 'ET',
+  MD: 'ET',
+  DE: 'ET',
+  DC: 'ET',
 };
 
-const ZONE_TO_IANA: Record<UsZoneKey, string> = {
+export const ZONE_TO_IANA: Record<UsZoneKey, string> = {
   PT: 'America/Los_Angeles',
   MT: 'America/Denver',
   CT: 'America/Chicago',
@@ -41,7 +81,7 @@ export function timeZoneForCityState(cityState?: string | null): string | null {
   return key ? ZONE_TO_IANA[key] : null;
 }
 
-export function tzAbbrevForCityState(cityState?: string | null): string | null {
+export function tzAbbrevForCityState(cityState?: string | null, at: Date = new Date()): string | null {
   const tz = timeZoneForCityState(cityState);
   if (!tz) return null;
 
@@ -49,7 +89,8 @@ export function tzAbbrevForCityState(cityState?: string | null): string | null {
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: tz,
       timeZoneName: 'short',
-    }).formatToParts(new Date());
+    }).formatToParts(at);
+
     return parts.find((p) => p.type === 'timeZoneName')?.value ?? null;
   } catch {
     return null;
@@ -59,20 +100,23 @@ export function tzAbbrevForCityState(cityState?: string | null): string | null {
 export function formatInTimeZone(
   iso: string | null | undefined,
   tz: string | null | undefined,
-  opts: Intl.DateTimeFormatOptions = {}
+  opts?: Intl.DateTimeFormatOptions
 ): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
 
+  const fallback: Intl.DateTimeFormatOptions = {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  };
+
   try {
     return new Intl.DateTimeFormat('en-US', {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      ...opts,
+      ...(opts && Object.keys(opts).length ? opts : fallback),
       ...(tz ? { timeZone: tz } : {}),
     }).format(d);
   } catch {
