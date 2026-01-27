@@ -1,8 +1,10 @@
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { KeyboardEvent } from 'react';
-import { formatTimeWindow, type EvaluatedLoad, type Load, type LoadStatus } from '@broker/shared';
+import { type EvaluatedLoad, type Load, type LoadStatus } from '@broker/shared';
+import { formatInTimeZone, timeZoneForCityState, tzAbbrevForCityState } from '@broker/shared';
 
 type LoadLike = Load | EvaluatedLoad;
 
@@ -15,11 +17,11 @@ function getStatus(load: LoadLike): LoadStatus {
 }
 
 function getRiskReason(load: LoadLike): string | undefined {
-  return isEvaluated(load) ? load.computedRiskReason : load.riskReason;
+  return isEvaluated(load) ? load.computedRiskReason : (load as any).riskReason;
 }
 
 function getNextAction(load: LoadLike): string {
-  return isEvaluated(load) ? load.computedNextAction : load.nextAction;
+  return isEvaluated(load) ? load.computedNextAction : (load as any).nextAction;
 }
 
 function statusStripClass(status: LoadStatus) {
@@ -44,29 +46,78 @@ function statusBadge(status: LoadStatus) {
   }
 }
 
-function gpsLabel(minutes: number | null) {
-  if (minutes === null) return 'Last GPS: —';
-  if (minutes < 1) return 'Last GPS: just now';
-  return `Last GPS: ${minutes} min ago`;
+function gpsLabel(minutes: number | null | undefined) {
+  const m =
+    typeof minutes === 'number' && Number.isFinite(minutes) ? Math.max(0, Math.floor(minutes)) : null;
+  if (m === null) return 'Last GPS: —';
+  if (m < 1) return 'Last GPS: just now';
+  return `Last GPS: ${m} min ago`;
+}
+
+function localizeIsoInText(text: string): string {
+  const isoRegex = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?Z\b/g;
+
+  return text.replace(isoRegex, (iso) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(d);
+  });
+}
+
+function safeHref(kind: 'tel' | 'sms', phone: string | null | undefined): string {
+  const p = (phone ?? '').trim();
+  if (!p) return '#';
+  return `${kind}:${p}`;
+}
+
+function getOptionalString(load: LoadLike, key: string): string | null {
+  const anyLoad = load as unknown as Record<string, unknown>;
+  const v = anyLoad[key];
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
 }
 
 export function LoadCard({ load }: { load: LoadLike }) {
   const router = useRouter();
 
+  // prevent hydration mismatch: no localized date/time until mounted
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const status = getStatus(load);
   const riskReason = getRiskReason(load);
   const nextAction = getNextAction(load);
 
-  const riskLine =
-    status === 'green'
-      ? statusBadge(status)
-      : `${statusBadge(status)} • ${riskReason ?? 'Needs attention.'}`;
+  const riskLine = useMemo(() => {
+    if (status === 'green') return statusBadge(status);
+    const base = `${statusBadge(status)} • ${riskReason ?? 'Needs attention.'}`;
+    return mounted ? localizeIsoInText(base) : base;
+  }, [status, riskReason, mounted]);
 
-  const pickupWindow = formatTimeWindow(load.pickupWindowStartISO, load.pickupWindowEndISO);
+  // Infer time zones (MVP). Later you can override with explicit fields.
+  const originTz = timeZoneForCityState(load.originCityState) ?? 'America/Los_Angeles';
+  const destTz = timeZoneForCityState(load.destCityState) ?? 'America/New_York';
 
-  const callHref = `tel:${load.carrierPhone}`;
-  const textHref = load.textLink ?? `sms:${load.carrierPhone}`;
-  const mapHref = load.mapLink ?? '#';
+  const pickupWindow = useMemo(() => {
+    if (!mounted) return '—';
+    return formatWindowInTz(load.pickupWindowStartISO, load.pickupWindowEndISO, originTz);
+  }, [mounted, load.pickupWindowStartISO, load.pickupWindowEndISO, originTz]);
+
+  const deliveryWindow = useMemo(() => {
+    if (!mounted) return '—';
+    return formatWindowInTz(load.deliveryWindowStartISO, load.deliveryWindowEndISO, destTz);
+  }, [mounted, load.deliveryWindowStartISO, load.deliveryWindowEndISO, destTz]);
+
+  const carrierPhone = getOptionalString(load, 'carrierPhone');
+  const callHref = safeHref('tel', carrierPhone);
+  const textHref = getOptionalString(load, 'textLink') ?? safeHref('sms', carrierPhone);
+  const mapHref = getOptionalString(load, 'mapLink') ?? '#';
 
   function goToLoad() {
     router.push(`/loads/${encodeURIComponent(load.id)}`);
@@ -109,10 +160,14 @@ export function LoadCard({ load }: { load: LoadLike }) {
               </div>
 
               <div className="mt-1 text-sm text-slate-600">
+                <span className="font-medium text-slate-700">Delivery:</span> {deliveryWindow}
+              </div>
+
+              <div className="mt-1 text-sm text-slate-600">
                 <span className="font-medium text-slate-700">Carrier:</span> {load.carrierName}
               </div>
 
-              <div className="mt-1 text-sm text-slate-600">{gpsLabel(load.lastGpsMinutesAgo)}</div>
+              <div className="mt-1 text-sm text-slate-600">{gpsLabel((load as any).lastGpsMinutesAgo)}</div>
             </div>
           </div>
 
@@ -137,8 +192,8 @@ export function LoadCard({ load }: { load: LoadLike }) {
               </a>
               <a
                 href={mapHref}
-                target="_blank"
-                rel="noreferrer"
+                target={mapHref === '#' ? undefined : '_blank'}
+                rel={mapHref === '#' ? undefined : 'noreferrer'}
                 onClick={(e) => e.stopPropagation()}
                 className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:border-slate-300"
               >
@@ -151,3 +206,7 @@ export function LoadCard({ load }: { load: LoadLike }) {
     </div>
   );
 }
+function formatWindowInTz(pickupWindowStartISO: string, pickupWindowEndISO: string, originTz: string): any {
+  throw new Error('Function not implemented.');
+}
+

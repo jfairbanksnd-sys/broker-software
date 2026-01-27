@@ -1,6 +1,8 @@
+// apps/web/app/loads/[id]/page.tsx
 import Link from 'next/link';
-import { mockLoads, type Load, evaluateLoad, type EvaluatedLoad } from '@broker/shared';
+import { mockLoads, evaluateLoad, type EvaluatedLoad, type Load } from '@broker/shared';
 import { ActionButtons, StatusBadge, type StatusLevel } from '@broker/ui';
+import { LocalizeTextWithIso } from '../../../components/LocalizeTextWithIso';
 
 function statusLevelFromComputed(status: EvaluatedLoad['computedStatus']): StatusLevel {
   if (status === 'red') return 'red';
@@ -36,25 +38,14 @@ function getLaneLabels(load: Load): { originLabel: string; destinationLabel: str
   return { originLabel, destinationLabel };
 }
 
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+function getLastGpsMinutes(load: Load): number | null {
+  const anyLoad = load as unknown as Record<string, unknown>;
+  const v =
+    (anyLoad.lastGpsMinutesAgo as number | undefined) ??
+    (anyLoad.last_gps_minutes_ago as number | undefined) ??
+    null;
 
-  return new Intl.DateTimeFormat('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(d);
-}
-
-function formatWindow(startIso: string | null, endIso: string | null): string {
-  if (!startIso && !endIso) return '—';
-  if (startIso && !endIso) return `${formatDateTime(startIso)} → —`;
-  if (!startIso && endIso) return `— → ${formatDateTime(endIso)}`;
-  // at this point both are non-null
-  return `${formatDateTime(startIso)} → ${formatDateTime(endIso)}`;
+  return typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.floor(v)) : null;
 }
 
 type GpsFreshness = {
@@ -68,16 +59,6 @@ function gpsFreshnessFromMinutes(minutes: number | null): GpsFreshness {
   if (minutes < 60) return { label: 'Fresh', level: 'green', detail: `${minutes} min ago` };
   if (minutes <= 120) return { label: 'Stale', level: 'yellow', detail: `${minutes} min ago` };
   return { label: 'Very stale', level: 'red', detail: `${minutes} min ago` };
-}
-
-function getLastGpsMinutes(load: Load): number | null {
-  const anyLoad = load as unknown as Record<string, unknown>;
-  const v =
-    (anyLoad.lastGpsMinutesAgo as number | undefined) ??
-    (anyLoad.last_gps_minutes_ago as number | undefined) ??
-    null;
-
-  return typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.floor(v)) : null;
 }
 
 function getSchedule(load: Load): {
@@ -97,8 +78,35 @@ function getSchedule(load: Load): {
   return { pickupStart, pickupEnd, deliveryStart, deliveryEnd };
 }
 
-function buildTimeline(load: Load, level: StatusLevel): Array<{ label: string; at: string }> {
-  const now = Date.now();
+/**
+ * IMPORTANT: This is a Server Component.
+ * We do NOT use Intl date formatting here for "local time" display.
+ * Instead we render ISO strings through <LocalizeTextWithIso />, which is client-side.
+ */
+function formatWindowNode(startIso: string | null, endIso: string | null) {
+  if (!startIso && !endIso) return '—';
+  if (startIso && !endIso)
+    return (
+      <>
+        <LocalizeTextWithIso text={startIso} /> → —
+      </>
+    );
+  if (!startIso && endIso)
+    return (
+      <>
+        — → <LocalizeTextWithIso text={endIso} />
+      </>
+    );
+
+  return (
+    <>
+      <LocalizeTextWithIso text={startIso} /> → <LocalizeTextWithIso text={endIso} />
+    </>
+  );
+}
+
+function buildTimeline(load: Load, level: StatusLevel, nowISO: string): Array<{ label: string; atISO: string }> {
+  const now = new Date(nowISO).getTime();
   const schedule = getSchedule(load);
 
   const offsetsMins =
@@ -108,14 +116,7 @@ function buildTimeline(load: Load, level: StatusLevel): Array<{ label: string; a
         ? [420, 360, 300, 180, 90, 35]
         : [480, 420, 360, 240, 150, 90];
 
-  const labels = [
-    'Tender accepted',
-    'Driver assigned',
-    'En route to pickup',
-    'Arrived at pickup',
-    'Loaded',
-    'In transit',
-  ];
+  const labels = ['Tender accepted', 'Driver assigned', 'En route to pickup', 'Arrived at pickup', 'Loaded', 'In transit'];
 
   const anchor =
     schedule.pickupStart && !Number.isNaN(new Date(schedule.pickupStart).getTime())
@@ -126,7 +127,7 @@ function buildTimeline(load: Load, level: StatusLevel): Array<{ label: string; a
     .map((label, i) => {
       const mins = offsetsMins[i] ?? 60;
       const ts = Math.min(anchor, now) - mins * 60_000;
-      return { label, at: new Date(ts).toISOString() };
+      return { label, atISO: new Date(ts).toISOString() };
     })
     .slice(0, 6);
 }
@@ -163,8 +164,10 @@ export default async function LoadDetailsPage({ params }: { params: Promise<{ id
     );
   }
 
-  // Phase 3: engine-driven evaluation (local-first, no backend)
-  const evaluated = evaluateLoad(rawLoad, new Date());
+  // Anchor "now" once per request so timeline is stable for this render.
+  const nowISO = new Date().toISOString();
+
+  const evaluated = evaluateLoad(rawLoad, new Date(nowISO));
   const level = statusLevelFromComputed(evaluated.computedStatus);
 
   const riskReason = evaluated.computedRiskReason ?? null;
@@ -177,8 +180,7 @@ export default async function LoadDetailsPage({ params }: { params: Promise<{ id
   const lastGpsMinutes = getLastGpsMinutes(evaluated);
   const freshness = gpsFreshnessFromMinutes(lastGpsMinutes);
 
-  const timeline = buildTimeline(evaluated, level);
-
+  const timeline = buildTimeline(evaluated, level, nowISO);
   const showNeedsAttention = evaluated.computedStatus !== 'green';
 
   return (
@@ -199,7 +201,7 @@ export default async function LoadDetailsPage({ params }: { params: Promise<{ id
 
           {showNeedsAttention && riskReason ? (
             <p className="mt-1 text-sm text-gray-700">
-              <span className="font-semibold">Reason:</span> {riskReason}
+              <span className="font-semibold">Reason:</span> <LocalizeTextWithIso text={riskReason} />
             </p>
           ) : null}
         </div>
@@ -216,7 +218,8 @@ export default async function LoadDetailsPage({ params }: { params: Promise<{ id
 
             <div className="space-y-2">
               <div className="text-sm text-gray-800">
-                <span className="font-semibold">Risk:</span> {riskReason ?? '—'}
+                <span className="font-semibold">Risk:</span>{' '}
+                {riskReason ? <LocalizeTextWithIso text={riskReason} /> : '—'}
               </div>
 
               <div className="text-sm text-gray-800">
@@ -260,14 +263,14 @@ export default async function LoadDetailsPage({ params }: { params: Promise<{ id
             <div className="rounded-xl bg-gray-50 p-4 ring-1 ring-black/5">
               <div className="text-xs font-semibold text-gray-500">Pickup window</div>
               <div className="mt-1 text-sm font-semibold text-gray-900">
-                {formatWindow(schedule.pickupStart, schedule.pickupEnd)}
+                {formatWindowNode(schedule.pickupStart, schedule.pickupEnd)}
               </div>
             </div>
 
             <div className="rounded-xl bg-gray-50 p-4 ring-1 ring-black/5">
               <div className="text-xs font-semibold text-gray-500">Delivery window</div>
               <div className="mt-1 text-sm font-semibold text-gray-900">
-                {formatWindow(schedule.deliveryStart, schedule.deliveryEnd)}
+                {formatWindowNode(schedule.deliveryStart, schedule.deliveryEnd)}
               </div>
             </div>
           </div>
@@ -302,7 +305,9 @@ export default async function LoadDetailsPage({ params }: { params: Promise<{ id
                 <span className="absolute left-0 top-1.5 h-2 w-2 rounded-full bg-gray-400" aria-hidden="true" />
                 <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:justify-between">
                   <div className="text-sm font-semibold text-gray-900">{e.label}</div>
-                  <div className="text-xs text-gray-500">{formatDateTime(e.at)}</div>
+                  <div className="text-xs text-gray-500">
+                    <LocalizeTextWithIso text={e.atISO} />
+                  </div>
                 </div>
               </li>
             ))}
