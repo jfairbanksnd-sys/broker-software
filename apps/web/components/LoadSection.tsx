@@ -1,5 +1,7 @@
-import type { Load } from '@broker/shared/src/types';
+import type { Load, EvaluatedLoad } from '@broker/shared';
 import { LoadCard } from '@broker/ui';
+
+type LoadLike = Load | EvaluatedLoad;
 
 export function LoadSection({
   title,
@@ -9,7 +11,7 @@ export function LoadSection({
 }: {
   title: string;
   subtitle?: React.ReactNode;
-  loads: Load[];
+  loads: LoadLike[];
   emptyState?: React.ReactNode;
 }) {
   return (

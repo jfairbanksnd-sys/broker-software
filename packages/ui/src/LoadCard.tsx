@@ -1,10 +1,28 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import type { Load } from '@broker/shared/src/types';
-import { formatTimeWindow } from '@broker/shared/src/time';
+import type { KeyboardEvent } from 'react';
+import { formatTimeWindow, type EvaluatedLoad, type Load, type LoadStatus } from '@broker/shared';
 
-function statusStripClass(status: Load['status']) {
+type LoadLike = Load | EvaluatedLoad;
+
+function isEvaluated(load: LoadLike): load is EvaluatedLoad {
+  return 'computedStatus' in load;
+}
+
+function getStatus(load: LoadLike): LoadStatus {
+  return isEvaluated(load) ? load.computedStatus : load.status;
+}
+
+function getRiskReason(load: LoadLike): string | undefined {
+  return isEvaluated(load) ? load.computedRiskReason : load.riskReason;
+}
+
+function getNextAction(load: LoadLike): string {
+  return isEvaluated(load) ? load.computedNextAction : load.nextAction;
+}
+
+function statusStripClass(status: LoadStatus) {
   switch (status) {
     case 'red':
       return 'bg-red-500';
@@ -15,7 +33,7 @@ function statusStripClass(status: Load['status']) {
   }
 }
 
-function statusBadge(status: Load['status']) {
+function statusBadge(status: LoadStatus) {
   switch (status) {
     case 'red':
       return '🔴 At Risk';
@@ -32,13 +50,17 @@ function gpsLabel(minutes: number | null) {
   return `Last GPS: ${minutes} min ago`;
 }
 
-export function LoadCard({ load }: { load: Load }) {
+export function LoadCard({ load }: { load: LoadLike }) {
   const router = useRouter();
 
+  const status = getStatus(load);
+  const riskReason = getRiskReason(load);
+  const nextAction = getNextAction(load);
+
   const riskLine =
-    load.status === 'green'
-      ? statusBadge(load.status)
-      : `${statusBadge(load.status)} • ${load.riskReason}`;
+    status === 'green'
+      ? statusBadge(status)
+      : `${statusBadge(status)} • ${riskReason ?? 'Needs attention.'}`;
 
   const pickupWindow = formatTimeWindow(load.pickupWindowStartISO, load.pickupWindowEndISO);
 
@@ -50,7 +72,7 @@ export function LoadCard({ load }: { load: Load }) {
     router.push(`/loads/${encodeURIComponent(load.id)}`);
   }
 
-  function onKeyDown(e: React.KeyboardEvent) {
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       goToLoad();
@@ -66,7 +88,7 @@ export function LoadCard({ load }: { load: Load }) {
       className="group block cursor-pointer rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:border-slate-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-slate-300"
     >
       <div className="flex">
-        <div className={`w-2 rounded-l-2xl ${statusStripClass(load.status)}`} />
+        <div className={`w-2 rounded-l-2xl ${statusStripClass(status)}`} />
 
         <div className="flex-1 p-4">
           <div className="flex items-start justify-between gap-3">
@@ -96,7 +118,7 @@ export function LoadCard({ load }: { load: Load }) {
 
           <div className="mt-3 rounded-xl bg-slate-50 p-3">
             <div className="text-xs font-semibold tracking-wide text-slate-500">NEXT ACTION</div>
-            <div className="mt-1 text-sm font-medium text-slate-900">{load.nextAction}</div>
+            <div className="mt-1 text-sm font-medium text-slate-900">{nextAction}</div>
 
             <div className="mt-3 flex flex-wrap gap-2">
               <a
