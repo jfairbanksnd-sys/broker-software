@@ -18,8 +18,19 @@ import {
   timeZoneForCityState
 } from '@broker/shared';
 
+import { deriveActions, type ActionDeriveLoad } from '../../../packages/shared/src/actions/deriveActions';
+import type { BrokerAction } from '../../../packages/shared/src/actions/types';
+
+import ActionQueue from '../components/ActionQueue';
 import { DashboardHeader } from '../components/DashboardHeader';
 import { LoadSection } from '../components/LoadSection';
+import {
+  overlayActionState,
+  setActionDone,
+  snoozeAction30m,
+  addContactLogEntry,
+  getLastContactForLoad,
+} from '../lib/actionStateStore';
 
 function matchesSearch(load: Load, q: string) {
   const s = q.trim().toLowerCase();
@@ -71,7 +82,7 @@ function localizeIsoInText(text: string): string {
   });
 }
 
-// ===== ADD HERE: timezone-aware ISO replacement for notifications =====
+// ===== timezone-aware ISO replacement for notifications =====
 function tzAbbrevForTimeZone(iso: string, timeZone: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
@@ -126,7 +137,7 @@ function pickTimeZoneForNotification(
 
   return tz ?? fallback;
 }
-// ===== END ADD HERE =====
+// ===== END =====
 
 function prettifyNotifCode(code: string): string {
   const words = code
@@ -157,6 +168,117 @@ function splitNotifMessage(
   };
 }
 
+// --- Phase 4 helpers (exception -> ActionDeriveLoad) ---
+function laneForLoad(l: any): string | undefined {
+  return (
+    l?.lane ??
+    (l?.originCityState && l?.destCityState ? `${l.originCityState} → ${l.destCityState}` : undefined)
+  );
+}
+
+function extractExceptionsForActions(l: any): Array<{ code: string; dueAtISO?: string }> {
+  // Try a few likely shapes without binding to a single internal schema.
+  const candidates =
+    l?.exceptions ??
+    l?.exceptionList ??
+    l?.exceptionEvents ??
+    l?.exceptionCodes ??
+    l?.codes ??
+    [];
+
+  if (!Array.isArray(candidates)) return [];
+
+  // string[] -> [{code}]
+  if (candidates.every((x) => typeof x === 'string')) {
+    return (candidates as string[]).map((code) => ({ code }));
+  }
+
+  // object[] -> try to find code/type + dueAt/dueAtISO
+  return (candidates as any[])
+    .map((e) => {
+      const code = e?.code ?? e?.type ?? e?.exceptionCode ?? e?.id;
+      const dueAtISO = e?.dueAtISO ?? e?.dueAt ?? e?.dueISO ?? e?.atISO ?? e?.timeISO;
+      if (!code || typeof code !== 'string') return null;
+      return { code, dueAtISO: typeof dueAtISO === 'string' ? dueAtISO : undefined };
+    })
+    .filter(Boolean) as Array<{ code: string; dueAtISO?: string }>;
+}
+
+function extractPhones(l: any): { carrierPhone?: string; driverPhone?: string } {
+  const carrierPhone =
+    l?.carrierPhone ??
+    l?.carrier?.phone ??
+    l?.carrierContactPhone ??
+    l?.contacts?.carrierPhone ??
+    undefined;
+
+  const driverPhone =
+    l?.driverPhone ??
+    l?.driver?.phone ??
+    l?.contacts?.driverPhone ??
+    undefined;
+
+  return {
+    carrierPhone: typeof carrierPhone === 'string' ? carrierPhone : undefined,
+    driverPhone: typeof driverPhone === 'string' ? driverPhone : undefined,
+  };
+}
+
+// ===== Phase 4.4.2: Email helpers (Dispatch + Driver) =====
+function isEmail(v: unknown): v is string {
+  return typeof v === 'string' && v.includes('@');
+}
+
+function getDispatchDriverEmails(load: any): { dispatchEmail?: string; driverEmail?: string } {
+  const dispatchEmail =
+    load?.dispatchEmail ??
+    load?.dispatcherEmail ??
+    load?.carrierDispatchEmail ??
+    load?.carrier?.dispatchEmail ??
+    load?.contacts?.dispatchEmail;
+
+  const driverEmail =
+    load?.driverEmail ??
+    load?.driver?.email ??
+    load?.contacts?.driverEmail;
+
+  return {
+    dispatchEmail: isEmail(dispatchEmail) ? dispatchEmail : undefined,
+    driverEmail: isEmail(driverEmail) ? driverEmail : undefined,
+  };
+}
+
+function buildMailtoHref(args: { to: string; cc?: string; subject: string; body: string }) {
+  const params = new URLSearchParams();
+  if (args.cc) params.set('cc', args.cc);
+  params.set('subject', args.subject);
+  params.set('body', args.body);
+  return `mailto:${encodeURIComponent(args.to)}?${params.toString()}`;
+}
+
+function buildDispatchDriverMailto(load: any, loadId: string, context: { title?: string; detail?: string }) {
+  const { dispatchEmail, driverEmail } = getDispatchDriverEmails(load);
+  if (!dispatchEmail && !driverEmail) return undefined;
+
+  // If both exist: To=dispatch, CC=driver. If only one exists: To=that one.
+  const to = dispatchEmail ?? driverEmail!;
+  const cc = dispatchEmail && driverEmail ? driverEmail : undefined;
+
+  const subject = `Load ${loadId} — Update Needed`;
+  const body = [
+    `Load: ${loadId}`,
+    context.title ? `Action: ${context.title}` : null,
+    context.detail ? `Detail: ${context.detail}` : null,
+    '',
+    'Please confirm current status and ETA.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return buildMailtoHref({ to, cc, subject, body });
+}
+// ===== end email helpers =====
+
 export default function DashboardClient() {
   // IMPORTANT: mounted is the FIRST hook and we never conditionally add hooks later.
   const [mounted, setMounted] = useState(false);
@@ -178,6 +300,9 @@ export default function DashboardClient() {
 
   // Local clock (only meaningful after mount)
   const [now, setNow] = useState<Date>(() => new Date());
+
+  // Action state bump: forces re-overlay after Done/Snooze clicks (without waiting for the 60s tick)
+  const [actionStateBump, setActionStateBump] = useState(0);
 
   // Mount gate: prevents SSR/client “now” drift + avoids locale/timezone render mismatch
   useEffect(() => {
@@ -257,10 +382,14 @@ export default function DashboardClient() {
     if (!mounted) return [];
     return evaluated
       .filter(
-        (l) => isSameLocalDay(l.pickupWindowStartISO, now) || isSameLocalDay(l.deliveryWindowStartISO, now)
+        (l) =>
+          isSameLocalDay(l.pickupWindowStartISO, now) ||
+          isSameLocalDay(l.deliveryWindowStartISO, now)
       )
       .sort(
-        (a, b) => new Date(a.pickupWindowStartISO).getTime() - new Date(b.pickupWindowStartISO).getTime()
+        (a, b) =>
+          new Date(a.pickupWindowStartISO).getTime() -
+          new Date(b.pickupWindowStartISO).getTime()
       );
   }, [mounted, evaluated, now]);
 
@@ -268,10 +397,14 @@ export default function DashboardClient() {
     if (!mounted) return [];
     return evaluated
       .filter(
-        (l) => withinNextHours(l.pickupWindowStartISO, 48) || withinNextHours(l.deliveryWindowStartISO, 48)
+        (l) =>
+          withinNextHours(l.pickupWindowStartISO, 48) ||
+          withinNextHours(l.deliveryWindowStartISO, 48)
       )
       .sort(
-        (a, b) => new Date(a.pickupWindowStartISO).getTime() - new Date(b.pickupWindowStartISO).getTime()
+        (a, b) =>
+          new Date(a.pickupWindowStartISO).getTime() -
+          new Date(b.pickupWindowStartISO).getTime()
       );
   }, [mounted, evaluated]);
 
@@ -323,6 +456,72 @@ export default function DashboardClient() {
       // ignore (local-only)
     }
   }, [mounted, snapshotsLoaded, evaluatedAll]);
+
+  // ---- Phase 4: derive + overlay Broker Actions (exception-first, noise-controlled) ----
+  const nowISO = useMemo(() => (mounted ? now.toISOString() : ''), [mounted, now]);
+
+  const openActionsForQueue = useMemo<BrokerAction[]>(() => {
+    if (!mounted) return [];
+    if (!nowISO) return [];
+
+    // Only derive actions from exception loads (Needs Attention), per Phase 4 definition.
+    const inputs: ActionDeriveLoad[] = needsAttention.map((l: any) => {
+      const { carrierPhone, driverPhone } = extractPhones(l);
+      return {
+        loadId: l.id,
+        lane: laneForLoad(l),
+        carrierPhone,
+        driverPhone,
+        pickupAddress: l?.pickupAddress ?? l?.pickup?.address,
+        deliveryAddress: l?.deliveryAddress ?? l?.delivery?.address,
+        exceptions: extractExceptionsForActions(l),
+      };
+    });
+
+    const derived = deriveActions(inputs, nowISO);
+
+    // Overlay persisted status/snooze; prunes actions that no longer apply.
+    const { actions: withState } = overlayActionState(derived, nowISO);
+
+    // Only OPEN actions appear in Action Queue; snoozed disappear until expiry.
+    const open = withState.filter((a) => a.status === 'OPEN');
+
+    // Ensure "LoadId + lane" is visible in the queue without changing BrokerAction schema:
+    // We fold lane into detail so the queue shows it under the Load line.
+    const byId = new Map<string, any>();
+    for (const l of evaluatedAll as any[]) byId.set(l.id, l);
+
+    return open.map((a) => {
+      const l = byId.get(a.loadId);
+      const lane = laneForLoad(l);
+      const detail = lane ? (a.detail ? `${lane} — ${a.detail}` : lane) : a.detail;
+      const emailHref = buildDispatchDriverMailto(l, a.loadId, { title: a.title, detail });
+      const last = getLastContactForLoad(a.loadId);
+      const lastContactedLabel = last
+        ? new Date(last.atISO).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+        : undefined;
+      return { ...a, detail, emailHref, lastContactedLabel };
+    });
+    // actionStateBump triggers re-overlay immediately after Done/Snooze clicks
+  }, [mounted, nowISO, needsAttention, evaluatedAll, actionStateBump]);
+
+  function handleActionDone(a: BrokerAction) {
+    const clickISO = new Date().toISOString();
+    setActionDone(a.id, clickISO);
+    setActionStateBump((v) => v + 1);
+  }
+
+  function handleActionContact(a: BrokerAction, method: "CALL" | "TEXT" | "MAP" | "EMAIL") {
+  const atISO = new Date().toISOString();
+  addContactLogEntry({ actionId: a.id, loadId: a.loadId, method, atISO });
+  setActionStateBump((v) => v + 1); // forces immediate label refresh
+}
+
+  function handleActionSnooze30m(a: BrokerAction) {
+    const clickISO = new Date().toISOString();
+    snoozeAction30m(a.id, clickISO);
+    setActionStateBump((v) => v + 1);
+  }
 
   // Server + first client render are identical (no dynamic content yet)
   if (!mounted) {
@@ -442,10 +641,21 @@ export default function DashboardClient() {
                     </button>
                   );
                 })
-
               )}
             </div>
           </section>
+        ) : null}
+
+        {/* Phase 4: Action Queue (appears above Needs Attention only when OPEN actions exist) */}
+        {openActionsForQueue.length > 0 ? (
+          <div className="mt-4">
+            <ActionQueue
+              actions={openActionsForQueue}
+              onDone={handleActionDone}
+              onSnooze30m={handleActionSnooze30m}
+              onContact={handleActionContact}
+            />
+          </div>
         ) : null}
 
         <LoadSection
