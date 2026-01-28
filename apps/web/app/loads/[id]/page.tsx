@@ -1,9 +1,12 @@
-// apps/web/app/loads/[id]/page.tsx
 import Link from 'next/link';
 import { mockLoads, evaluateLoad, type EvaluatedLoad, type Load } from '@broker/shared';
-import { ActionButtons, StatusBadge, type StatusLevel } from '@broker/ui';
+import { StatusBadge, type StatusLevel } from '@broker/ui';
 import { LocalizeTextWithIso } from '../../../components/LocalizeTextWithIso';
 import { LoadDetailHeader } from '../../../components/LoadDetailHeader';
+
+// NEW (client components)
+import ActionButtonsWithLog from '../../../components/ActionButtonsWithLog';
+import LoadContactLog from '../../../components/LoadContactLog';
 
 function statusLevelFromComputed(status: EvaluatedLoad['computedStatus']): StatusLevel {
   if (status === 'red') return 'red';
@@ -298,11 +301,16 @@ export default async function LoadDetailsPage({ params }: { params: Promise<{ id
                   <span className="font-semibold">Next Action:</span> {nextAction}
                 </div>
 
-                <ActionButtons
+                {/* Logged call/text/map actions */}
+                <ActionButtonsWithLog
+                  loadId={decodedId}
                   phone={carrierPhone}
                   originLabel={originLabel}
                   destinationLabel={destinationLabel}
                 />
+
+                {/* Contact log + last contacted (local-only) */}
+                <LoadContactLog loadId={decodedId} />
               </div>
             </section>
           ) : null}
@@ -324,11 +332,14 @@ export default async function LoadDetailsPage({ params }: { params: Promise<{ id
                 <div className="mt-1 text-sm text-gray-700">{carrierPhone ?? '—'}</div>
 
                 <div className="mt-3">
-                  <ActionButtons
+                  <ActionButtonsWithLog
+                    loadId={decodedId}
                     phone={carrierPhone}
                     originLabel={originLabel}
                     destinationLabel={destinationLabel}
                   />
+                  {/* Always visible log reference near carrier contact */}
+                  <LoadContactLog loadId={decodedId} limit={5} />
                 </div>
               </div>
             </div>
