@@ -9,116 +9,168 @@ function deriveMapLink(origin: string, dest: string) {
 
 function deriveTextLink(phone: string, body: string) {
   const b = encodeURIComponent(body);
-  // Works on most devices; desktop will no-op gracefully
   return `sms:${phone}?&body=${b}`;
 }
 
-function makeLoad(partial: Omit<Load, 'mapLink' | 'textLink'>): Load {
+/**
+ * Extra contact fields for Phase 4:
+ * - UI reads these via safe "any" accessors (no schema migration yet)
+ * - We keep export typed as Load[] for the rest of the app.
+ */
+type LoadWithContacts = Omit<Load, 'mapLink' | 'textLink'> & {
+  dispatchEmail?: string;
+  driverEmail?: string;
+  dispatchPhone?: string;
+  driverPhone?: string;
+};
+
+function makeLoad(partial: LoadWithContacts): Load {
+  const smsPhone = partial.driverPhone ?? partial.dispatchPhone ?? partial.carrierPhone;
+
   return {
-    ...partial,
+    ...(partial as any),
     mapLink: deriveMapLink(partial.originCityState, partial.destCityState),
-    textLink: deriveTextLink(
-      partial.carrierPhone,
-      `Load ${partial.id}: ${partial.nextAction}`,
-    ),
-  };
+    textLink: deriveTextLink(smsPhone, `Load ${partial.id}: ${partial.nextAction}`),
+  } as Load;
 }
 
 /**
  * Mock data notes:
- * - Times are generated relative to "now" so the dashboard sections (Today / Next 48h) stay meaningful.
- * - Exceptions include at least 2 red, 3 yellow.
+ * - Times are generated relative to "now" so the dashboard sections stay meaningful.
+ * - Includes multiple red/yellow to drive Action Queue.
+ * - Includes dispatchEmail + driverEmail so email CTAs are enabled.
  */
 export const mockLoads: Load[] = (() => {
   const now = new Date();
 
   return [
-    // 🔴 RED (late pickup + stale GPS)
+    // 🔴 RED: pickup window missed + GPS very stale
     makeLoad({
       id: 'L-10421',
       status: 'red',
-      riskReason: '2h late pickup',
+      riskReason: 'Pickup late + GPS very stale',
       originCityState: 'Portland, OR',
       destCityState: 'Boise, ID',
-      pickupWindowStartISO: toIso(addHours(now, -4)),
-      pickupWindowEndISO: toIso(addHours(now, -2)),
+      pickupWindowStartISO: toIso(addHours(now, -5)),
+      pickupWindowEndISO: toIso(addHours(now, -3)),
       deliveryWindowStartISO: toIso(addHours(now, 10)),
       deliveryWindowEndISO: toIso(addHours(now, 14)),
       carrierName: 'Cascadia Haul Co.',
-      carrierPhone: '+15035550111',
-      lastGpsMinutesAgo: 190,
-      nextAction: 'Call carrier for pickup ETA + confirm on-site status.',
+      carrierPhone: '+15035550111',      // dispatch/main
+      dispatchPhone: '+15035550111',
+      driverPhone: '+15035550911',
+      dispatchEmail: 'dispatch@cascadiahaul.example',
+      driverEmail: 'driver.l10421@cascadiahaul.example',
+      lastGpsMinutesAgo: 205,
+      nextAction: 'Call carrier: confirm pickup ETA and current location.',
     }),
 
-    // 🔴 RED (delivery risk + no GPS)
+    // 🔴 RED: no GPS + delivery window soon
     makeLoad({
       id: 'L-10433',
       status: 'red',
-      riskReason: 'No GPS ping',
+      riskReason: 'No GPS ping + delivery window soon',
       originCityState: 'Tacoma, WA',
       destCityState: 'Sacramento, CA',
-      pickupWindowStartISO: toIso(addHours(now, -12)),
-      pickupWindowEndISO: toIso(addHours(now, -10)),
-      deliveryWindowStartISO: toIso(addHours(now, 8)),
-      deliveryWindowEndISO: toIso(addHours(now, 10)),
+      pickupWindowStartISO: toIso(addHours(now, -14)),
+      pickupWindowEndISO: toIso(addHours(now, -12)),
+      deliveryWindowStartISO: toIso(addHours(now, 5)),
+      deliveryWindowEndISO: toIso(addHours(now, 7)),
       carrierName: 'NorthStar Freight',
       carrierPhone: '+12065550122',
+      dispatchPhone: '+12065550122',
+      driverPhone: '+12065550922',
+      dispatchEmail: 'dispatch@northstarfreight.example',
+      driverEmail: 'driver.l10433@northstarfreight.example',
       lastGpsMinutesAgo: null,
-      nextAction: 'Text carrier requesting immediate GPS/location update.',
+      nextAction: 'Text carrier: request immediate location/GPS update.',
     }),
 
-    // 🟡 YELLOW (watch: borderline pickup window)
+    // 🔴 RED: delivery window missed
+    makeLoad({
+      id: 'L-10458',
+      status: 'red',
+      riskReason: 'Delivery window missed',
+      originCityState: 'Eugene, OR',
+      destCityState: 'San Jose, CA',
+      pickupWindowStartISO: toIso(addHours(now, -20)),
+      pickupWindowEndISO: toIso(addHours(now, -18)),
+      deliveryWindowStartISO: toIso(addHours(now, -2)),
+      deliveryWindowEndISO: toIso(addMinutes(now, -30)),
+      carrierName: 'HighDesert Logistics',
+      carrierPhone: '+15415550144',
+      dispatchPhone: '+15415550144',
+      driverPhone: '+15415550944',
+      dispatchEmail: 'dispatch@highdesertlogistics.example',
+      driverEmail: 'driver.l10458@highdesertlogistics.example',
+      lastGpsMinutesAgo: 95,
+      nextAction: 'Call carrier: get updated ETA and inform consignee.',
+    }),
+
+    // 🟡 YELLOW: pickup window starts soon
     makeLoad({
       id: 'L-10410',
       status: 'yellow',
-      riskReason: 'Pickup window starts in 45m',
+      riskReason: 'Pickup window starts in 35m',
       originCityState: 'Salem, OR',
       destCityState: 'Spokane, WA',
-      pickupWindowStartISO: toIso(addMinutes(now, 45)),
+      pickupWindowStartISO: toIso(addMinutes(now, 35)),
       pickupWindowEndISO: toIso(addHours(now, 2)),
       deliveryWindowStartISO: toIso(addHours(now, 14)),
       deliveryWindowEndISO: toIso(addHours(now, 18)),
       carrierName: 'Iron Ridge Transport',
       carrierPhone: '+15415550133',
-      lastGpsMinutesAgo: 52,
-      nextAction: 'Monitor; ping carrier if not checked-in by window start.',
+      dispatchPhone: '+15415550133',
+      driverPhone: '+15415550933',
+      dispatchEmail: 'dispatch@ironridgetransport.example',
+      driverEmail: 'driver.l10410@ironridgetransport.example',
+      lastGpsMinutesAgo: 48,
+      nextAction: 'Call carrier if no check-in by window start.',
     }),
 
-    // 🟡 YELLOW (watch: GPS getting stale)
+    // 🟡 YELLOW: GPS getting stale
     makeLoad({
       id: 'L-10418',
       status: 'yellow',
-      riskReason: 'GPS stale (89m)',
-      originCityState: 'Eugene, OR',
+      riskReason: 'GPS stale (~92m)',
+      originCityState: 'Vancouver, WA',
       destCityState: 'Reno, NV',
-      pickupWindowStartISO: toIso(addHours(now, -1)),
+      pickupWindowStartISO: toIso(addHours(now, -2)),
       pickupWindowEndISO: toIso(addHours(now, 1)),
-      deliveryWindowStartISO: toIso(addHours(now, 20)),
-      deliveryWindowEndISO: toIso(addHours(now, 24)),
-      carrierName: 'HighDesert Logistics',
-      carrierPhone: '+15415550144',
-      lastGpsMinutesAgo: 89,
-      nextAction: 'Text carrier: request location + confirm moving toward pickup.',
+      deliveryWindowStartISO: toIso(addHours(now, 18)),
+      deliveryWindowEndISO: toIso(addHours(now, 22)),
+      carrierName: 'Evergreen Linehaul',
+      carrierPhone: '+13605550155',
+      dispatchPhone: '+13605550155',
+      driverPhone: '+13605550955',
+      dispatchEmail: 'dispatch@evergreenlinehaul.example',
+      driverEmail: 'driver.l10418@evergreenlinehaul.example',
+      lastGpsMinutesAgo: 92,
+      nextAction: 'Text carrier: request updated location and progress.',
     }),
 
-    // 🟡 YELLOW (watch: tight delivery window)
+    // 🟡 YELLOW: tight delivery window approaching
     makeLoad({
       id: 'L-10427',
       status: 'yellow',
-      riskReason: 'Tight delivery window (ETA variance)',
-      originCityState: 'Vancouver, WA',
+      riskReason: 'Tight delivery window (approaching)',
+      originCityState: 'Longview, WA',
       destCityState: 'Medford, OR',
-      pickupWindowStartISO: toIso(addHours(now, 3)),
-      pickupWindowEndISO: toIso(addHours(now, 5)),
-      deliveryWindowStartISO: toIso(addHours(now, 12)),
-      deliveryWindowEndISO: toIso(addHours(now, 13)),
-      carrierName: 'Evergreen Linehaul',
-      carrierPhone: '+13605550155',
-      lastGpsMinutesAgo: 35,
-      nextAction: 'Verify route plan and confirm delivery appointment.',
+      pickupWindowStartISO: toIso(addHours(now, 2)),
+      pickupWindowEndISO: toIso(addHours(now, 4)),
+      deliveryWindowStartISO: toIso(addHours(now, 9)),
+      deliveryWindowEndISO: toIso(addHours(now, 10)),
+      carrierName: 'Columbia Corridor',
+      carrierPhone: '+13605550199',
+      dispatchPhone: '+13605550199',
+      driverPhone: '+13605550999',
+      dispatchEmail: 'dispatch@columbiacorridor.example',
+      driverEmail: 'driver.l10427@columbiacorridor.example',
+      lastGpsMinutesAgo: 38,
+      nextAction: 'Call carrier: confirm ETA and delivery appointment readiness.',
     }),
 
-    // 🟢 GREEN
+    // 🟢 GREEN: today
     makeLoad({
       id: 'L-10398',
       status: 'green',
@@ -130,27 +182,35 @@ export const mockLoads: Load[] = (() => {
       deliveryWindowEndISO: toIso(addHours(now, 12)),
       carrierName: 'Puget Sound Carriers',
       carrierPhone: '+12065550166',
-      lastGpsMinutesAgo: 18,
+      dispatchPhone: '+12065550166',
+      driverPhone: '+12065550966',
+      dispatchEmail: 'dispatch@pugetsoundcarriers.example',
+      driverEmail: 'driver.l10398@pugetsoundcarriers.example',
+      lastGpsMinutesAgo: 16,
       nextAction: 'No action needed. Monitor normally.',
     }),
 
-    // 🟢 GREEN
+    // 🟢 GREEN: in progress today
     makeLoad({
       id: 'L-10402',
       status: 'green',
       originCityState: 'Gresham, OR',
       destCityState: 'Bend, OR',
-      pickupWindowStartISO: toIso(addHours(now, -2)),
-      pickupWindowEndISO: toIso(addHours(now, -1)),
-      deliveryWindowStartISO: toIso(addHours(now, 4)),
-      deliveryWindowEndISO: toIso(addHours(now, 6)),
+      pickupWindowStartISO: toIso(addHours(now, -3)),
+      pickupWindowEndISO: toIso(addHours(now, -2)),
+      deliveryWindowStartISO: toIso(addHours(now, 3)),
+      deliveryWindowEndISO: toIso(addHours(now, 5)),
       carrierName: 'Summit Routes',
       carrierPhone: '+15035550177',
-      lastGpsMinutesAgo: 22,
+      dispatchPhone: '+15035550177',
+      driverPhone: '+15035550977',
+      dispatchEmail: 'dispatch@summitroutes.example',
+      driverEmail: 'driver.l10402@summitroutes.example',
+      lastGpsMinutesAgo: 21,
       nextAction: 'No action needed. Monitor normally.',
     }),
 
-    // 🟢 GREEN (tomorrow-ish, in next 48h)
+    // 🟢 GREEN: tomorrow-ish (next 48h)
     makeLoad({
       id: 'L-10405',
       status: 'green',
@@ -162,27 +222,56 @@ export const mockLoads: Load[] = (() => {
       deliveryWindowEndISO: toIso(addHours(now, 36)),
       carrierName: 'Rainier Freight',
       carrierPhone: '+13605550188',
+      dispatchPhone: '+13605550188',
+      driverPhone: '+13605550988',
+      dispatchEmail: 'dispatch@rainierfreight.example',
+      driverEmail: 'driver.l10405@rainierfreight.example',
       lastGpsMinutesAgo: 12,
       nextAction: 'No action needed. Monitor normally.',
     }),
 
-    // 🟢 GREEN (next 48h)
+    // 🟢 GREEN: next 48h
     makeLoad({
       id: 'L-10407',
       status: 'green',
-      originCityState: 'Longview, WA',
-      destCityState: 'Eugene, OR',
+      originCityState: 'Spokane, WA',
+      destCityState: 'Missoula, MT',
       pickupWindowStartISO: toIso(addHours(now, 40)),
       pickupWindowEndISO: toIso(addHours(now, 42)),
-      deliveryWindowStartISO: toIso(addHours(now, 46)),
-      deliveryWindowEndISO: toIso(addHours(now, 48)),
-      carrierName: 'Columbia Corridor',
-      carrierPhone: '+13605550199',
-      lastGpsMinutesAgo: 9,
+      deliveryWindowStartISO: toIso(addHours(now, 48)),
+      deliveryWindowEndISO: toIso(addHours(now, 52)),
+      carrierName: 'Mountain West Haulers',
+      carrierPhone: '+15095550190',
+      dispatchPhone: '+15095550190',
+      driverPhone: '+15095550990',
+      dispatchEmail: 'dispatch@mountainwesthaulers.example',
+      driverEmail: 'driver.l10407@mountainwesthaulers.example',
+      lastGpsMinutesAgo: 10,
       nextAction: 'No action needed. Monitor normally.',
     }),
 
-    // 🟢 GREEN (older, not today/next48 depending on now)
+    // 🟡 YELLOW: early watch item
+    makeLoad({
+      id: 'L-10466',
+      status: 'yellow',
+      riskReason: 'Early GPS staleness (watch)',
+      originCityState: 'San Diego, CA',
+      destCityState: 'Phoenix, AZ',
+      pickupWindowStartISO: toIso(addHours(now, 6)),
+      pickupWindowEndISO: toIso(addHours(now, 8)),
+      deliveryWindowStartISO: toIso(addHours(now, 18)),
+      deliveryWindowEndISO: toIso(addHours(now, 22)),
+      carrierName: 'Southwest Express',
+      carrierPhone: '+16195550123',
+      dispatchPhone: '+16195550123',
+      driverPhone: '+16195550923',
+      dispatchEmail: 'dispatch@southwestexpress.example',
+      driverEmail: 'driver.l10466@southwestexpress.example',
+      lastGpsMinutesAgo: 75,
+      nextAction: 'Text carrier: confirm driver assigned and tracking stable.',
+    }),
+
+    // 🟢 GREEN: beyond 48h
     makeLoad({
       id: 'L-10377',
       status: 'green',
@@ -194,8 +283,12 @@ export const mockLoads: Load[] = (() => {
       deliveryWindowEndISO: toIso(addHours(now, 76)),
       carrierName: 'Intermountain Haulers',
       carrierPhone: '+12085550110',
+      dispatchPhone: '+12085550110',
+      driverPhone: '+12085550910',
+      dispatchEmail: 'dispatch@intermountainhaulers.example',
+      driverEmail: 'driver.l10377@intermountainhaulers.example',
       lastGpsMinutesAgo: 14,
       nextAction: 'No action needed. Monitor normally.',
-    })
+    }),
   ];
 })();

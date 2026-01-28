@@ -7,6 +7,7 @@ import { LoadDetailHeader } from '../../../components/LoadDetailHeader';
 // NEW (client components)
 import ActionButtonsWithLog from '../../../components/ActionButtonsWithLog';
 import LoadContactLog from '../../../components/LoadContactLog';
+import EmailDispatchDriverButton from '../../../components/EmailDispatchDriverButton';
 
 function statusLevelFromComputed(status: EvaluatedLoad['computedStatus']): StatusLevel {
   if (status === 'red') return 'red';
@@ -24,6 +25,31 @@ function getCarrier(load: Load): { name: string | null; phone: string | null } {
     (carrier?.phone as string | undefined) ?? (anyLoad.carrierPhone as string | undefined) ?? null;
 
   return { name: name?.trim() || null, phone: phone?.trim() || null };
+}
+
+function getDispatchDriverEmails(load: Load): { dispatchEmail: string | null; driverEmail: string | null } {
+  const anyLoad = load as unknown as Record<string, unknown>;
+  const carrier = anyLoad.carrier as any;
+
+  const dispatchEmail =
+    (anyLoad.dispatchEmail as string | undefined) ??
+    (anyLoad.dispatcherEmail as string | undefined) ??
+    (anyLoad.carrierDispatchEmail as string | undefined) ??
+    (carrier?.dispatchEmail as string | undefined) ??
+    (anyLoad.contacts as any)?.dispatchEmail ??
+    null;
+
+  const driverEmail =
+    (anyLoad.driverEmail as string | undefined) ??
+    (carrier?.driverEmail as string | undefined) ??
+    (anyLoad.driver as any)?.email ??
+    (anyLoad.contacts as any)?.driverEmail ??
+    null;
+
+  return {
+    dispatchEmail: typeof dispatchEmail === "string" ? dispatchEmail : null,
+    driverEmail: typeof driverEmail === "string" ? driverEmail : null,
+  };
 }
 
 function getLaneLabels(load: Load): { originLabel: string; destinationLabel: string } {
@@ -249,6 +275,7 @@ export default async function LoadDetailsPage({ params }: { params: Promise<{ id
   const nextAction = evaluated.computedNextAction;
 
   const { name: carrierName, phone: carrierPhone } = getCarrier(evaluated);
+  const { dispatchEmail, driverEmail } = getDispatchDriverEmails(evaluated);
   const { originLabel, destinationLabel } = getLaneLabels(evaluated);
   const schedule = getSchedule(evaluated);
 
@@ -308,6 +335,21 @@ export default async function LoadDetailsPage({ params }: { params: Promise<{ id
                   originLabel={originLabel}
                   destinationLabel={destinationLabel}
                 />
+                <div className="mt-3">
+                  <EmailDispatchDriverButton
+                    loadId={decodedId}
+                    dispatchEmail={dispatchEmail}
+                    driverEmail={driverEmail}
+                    subject={`Load ${decodedId} — Update Needed`}
+                    bodyLines={[
+                      `Load: ${decodedId}`,
+                      riskReason ? `Risk: ${riskReason}` : '',
+                      nextAction ? `Next Action: ${nextAction}` : '',
+                      '',
+                      'Please confirm current status and ETA.',
+                    ]}
+                  />
+                </div>
 
                 {/* Contact log + last contacted (local-only) */}
                 <LoadContactLog loadId={decodedId} />
