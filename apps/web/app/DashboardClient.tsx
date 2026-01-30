@@ -82,6 +82,24 @@ function localizeIsoInText(text: string): string {
   });
 }
 
+// --- Phase 4.x: Future section helpers ---
+function getAnchorISO(l: any): string | null {
+  return (
+    l?.pickupWindowStartISO ??
+    l?.pickupWindowEndISO ??
+    l?.deliveryWindowStartISO ??
+    l?.deliveryWindowEndISO ??
+    null
+  );
+}
+
+function toMs(iso: string | null | undefined): number {
+  if (!iso) return Number.NaN;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : Number.NaN;
+}
+// --- end helpers ---
+
 // ===== timezone-aware ISO replacement for notifications =====
 function tzAbbrevForTimeZone(iso: string, timeZone: string): string {
   const d = new Date(iso);
@@ -408,6 +426,28 @@ export default function DashboardClient() {
       );
   }, [mounted, evaluated]);
 
+  const futureLoads = useMemo(() => {
+  if (!mounted) return [];
+
+  const horizonMs = now.getTime() + 48 * 60 * 60 * 1000;
+
+  const idsNeeds = new Set(needsAttention.map((l) => l.id));
+  const idsToday = new Set(todaysLoads.map((l) => l.id));
+  const idsUpcoming = new Set(next48h.map((l) => l.id));
+
+  return evaluated
+    .filter((l) => !idsNeeds.has(l.id) && !idsToday.has(l.id) && !idsUpcoming.has(l.id))
+    .filter((l) => {
+      const t = toMs(getAnchorISO(l));
+      return Number.isFinite(t) && t > horizonMs;
+    })
+    .sort((a, b) => {
+      const ta = toMs(getAnchorISO(a));
+      const tb = toMs(getAnchorISO(b));
+      return ta - tb;
+    });
+}, [mounted, evaluated, needsAttention, todaysLoads, next48h, now]);
+
   const unreadCount = useMemo(() => {
     if (!mounted) return 0;
     let n = 0;
@@ -655,38 +695,186 @@ export default function DashboardClient() {
               onSnooze30m={handleActionSnooze30m}
               onContact={handleActionContact}
             />
+            
           </div>
         ) : null}
 
-        <LoadSection
-          title="Needs Attention"
-          subtitle={
-            <span>
-              <span className="mr-2">🔴 {counts.red} At Risk</span>
-              <span>🟡 {counts.yellow} Watch</span>
-            </span>
-          }
-          loads={needsAttention}
-          emptyState={
-            <div className="text-base font-medium text-slate-900">
-              🎉 All loads are on track. We’ll notify you if anything changes.
+
+       {/* Needs Attention */}
+        <details className="mt-6 group rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <summary className="cursor-pointer list-none select-none rounded-xl bg-red-50/60 px-3 py-2 ring-1 ring-red-200/60 hover:bg-red-50">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                {/* Left warning triangle */}
+                <span className="inline-flex h-6 w-6 items-center justify-center text-red-600" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="currentColor" className="h-6 w-6">
+                    <path d="M12 3.2c.4 0 .8.2 1 .6l9 15.6c.4.8-.1 1.8-1.1 1.8H3.1c-1 0-1.5-1-1.1-1.8l9-15.6c.2-.4.6-.6 1-.6zm0 5.3c-.6 0-1 .4-1 1v5.8c0 .6.4 1 1 1s1-.4 1-1V9.5c0-.6-.4-1-1-1zm0 10.2a1.2 1.2 0 100 2.4 1.2 1.2 0 000-2.4z" />
+                  </svg>
+                </span>
+
+                <div>
+                  <div className="text-lg font-semibold text-slate-900">Needs Attention</div>
+                  <div className="mt-1 text-sm text-slate-600">Only red/yellow loads that require action.</div>
+                </div>
+
+                {/* Right warning triangle */}
+                <span className="inline-flex h-6 w-6 items-center justify-center text-red-600" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="currentColor" className="h-6 w-6">
+                    <path d="M12 3.2c.4 0 .8.2 1 .6l9 15.6c.4.8-.1 1.8-1.1 1.8H3.1c-1 0-1.5-1-1.1-1.8l9-15.6c.2-.4.6-.6 1-.6zm0 5.3c-.6 0-1 .4-1 1v5.8c0 .6.4 1 1 1s1-.4 1-1V9.5c0-.6-.4-1-1-1zm0 10.2a1.2 1.2 0 100 2.4 1.2 1.2 0 000-2.4z" />
+                  </svg>
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                <span className="group-open:hidden">Show ({needsAttention.length})</span>
+                <span className="hidden group-open:inline">Hide ({needsAttention.length})</span>
+                <svg
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  className="h-4 w-4 text-slate-500 transition-transform duration-200 group-open:rotate-180"
+                  aria-hidden="true"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </div>
             </div>
-          }
-        />
+          </summary>
 
-        <LoadSection
-          title="Today’s Loads"
-          subtitle="Pickup or delivery occurring today."
-          loads={todaysLoads}
-          emptyState="No loads scheduled for today."
-        />
+          <div className="mt-4">
+            <LoadSection
+              title="Needs Attention"
+              subtitle="Only red/yellow loads that require action."
+              loads={needsAttention}
+              emptyState="No loads need attention."
+              hideHeader
+            />
+          </div>
+        </details>
 
-        <LoadSection
-          title="Upcoming (Next 48 Hours)"
-          subtitle="Loads starting/ending in the next 48 hours, ordered by soonest event."
-          loads={next48h}
-          emptyState="No loads in the next 48 hours."
-        />
+         {/* Todays */}
+        <details className="mt-6 group rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <summary className="cursor-pointer list-none select-none">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-900">Today’s Loads</div>
+                <div className="mt-1 text-sm text-slate-600">Loads with pickup/delivery activity today.</div>
+              </div>
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                <span className="group-open:hidden">Show ({todaysLoads.length})</span>
+                <span className="hidden group-open:inline">Hide ({todaysLoads.length})</span>
+                <svg
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  className="h-4 w-4 text-slate-500 transition-transform duration-200 group-open:rotate-180"
+                  aria-hidden="true"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </div>
+            </div>
+          </summary>
+
+          <div className="mt-4">
+            <LoadSection
+              title="Today’s Loads"
+              subtitle="Loads with pickup/delivery activity today."
+              loads={todaysLoads}
+              emptyState="No loads for today."
+              hideHeader
+            />
+          </div>
+        </details>
+
+        {/* Upcoming */}
+        <details className="mt-6 group rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <summary className="cursor-pointer list-none select-none">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-900">Upcoming (Next 48 Hours)</div>
+                <div className="mt-1 text-sm text-slate-600">Loads starting/ending within 48 hours.</div>
+              </div>
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                <span className="group-open:hidden">Show ({next48h.length})</span>
+                <span className="hidden group-open:inline">Hide ({next48h.length})</span>
+                <svg
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  className="h-4 w-4 text-slate-500 transition-transform duration-200 group-open:rotate-180"
+                  aria-hidden="true"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </div>
+            </div>
+          </summary>
+
+          <div className="mt-4">
+            <LoadSection
+              title="Upcoming (Next 48 Hours)"
+              subtitle="Loads starting/ending within 48 hours."
+              loads={next48h}
+              emptyState="No upcoming loads."
+              hideHeader
+            />
+          </div>
+        </details>
+
+        {/* Future */}
+
+        {futureLoads.length ? (
+          <>
+            <details className="mt-6 group rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <summary className="cursor-pointer list-none select-none">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-900">Future</div>
+                    <div className="mt-1 text-sm text-slate-600">
+                      Loads beyond the next 48 hours.
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                    <span className="group-open:hidden">Show ({futureLoads.length})</span>
+                    <span className="hidden group-open:inline">Hide ({futureLoads.length})</span>
+                    <svg
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                      className="h-4 w-4 text-slate-500 transition-transform duration-200 group-open:rotate-180"
+                      aria-hidden="true"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  </div>
+                </div>
+              </summary>
+
+              <div className="mt-4">
+                <LoadSection
+                  title="Future Loads"
+                  subtitle="Scheduled after the next 48 hours."
+                  loads={futureLoads}
+                  emptyState="No future loads."
+                />
+              </div>
+            </details>
+          </>
+        ) : null}
+
       </main>
     </div>
   );

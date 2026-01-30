@@ -12,6 +12,19 @@ import {
 
 type LoadLike = Load | EvaluatedLoad;
 
+export type ContactMethod = 'CALL' | 'TEXT' | 'MAP' | 'EMAIL';
+
+export type LoadCardProps = {
+  load: LoadLike;
+
+  // Optional decorations provided by the app layer
+  lastContactedLabel?: string;
+  emailHref?: string;
+
+  // Optional callback so the app can log contacts (localStorage, etc.)
+  onContact?: (method: ContactMethod) => void;
+};
+
 function isEvaluated(load: LoadLike): load is EvaluatedLoad {
   return 'computedStatus' in load;
 }
@@ -151,7 +164,7 @@ function formatWindowInTz(
   return `${formatInTz(startIso!, timeZone)} → ${formatInTz(endIso!, timeZone)}${tz ? ` ${tz}` : ''}`;
 }
 
-export function LoadCard({ load }: { load: LoadLike }) {
+export function LoadCard({ load, lastContactedLabel, emailHref, onContact }: LoadCardProps) {
   const router = useRouter();
 
   // Prevent hydration mismatch: no localized date/time until mounted
@@ -206,6 +219,10 @@ export function LoadCard({ load }: { load: LoadLike }) {
     }
   }
 
+  const btnBase =
+    'rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:border-slate-300';
+  const btnDisabled = 'opacity-50 pointer-events-none';
+
   return (
     <div
       role="link"
@@ -253,30 +270,60 @@ export function LoadCard({ load }: { load: LoadLike }) {
             <div className="text-xs font-semibold tracking-wide text-slate-500">NEXT ACTION</div>
             <div className="mt-1 text-sm font-medium text-slate-900">{nextAction}</div>
 
+            {lastContactedLabel ? (
+              <div className="mt-1 text-xs text-slate-500">Last contacted: {lastContactedLabel}</div>
+            ) : null}
+
             <div className="mt-3 flex flex-wrap gap-2">
               <a
                 href={callHref}
-                onClick={(e) => e.stopPropagation()}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:border-slate-300"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onContact?.('CALL');
+                }}
+                className={btnBase}
               >
                 Call
               </a>
+
               <a
                 href={textHref}
-                onClick={(e) => e.stopPropagation()}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:border-slate-300"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onContact?.('TEXT');
+                }}
+                className={btnBase}
               >
                 Text
               </a>
+
               <a
                 href={mapHref}
                 target={mapHref === '#' ? undefined : '_blank'}
                 rel={mapHref === '#' ? undefined : 'noreferrer'}
-                onClick={(e) => e.stopPropagation()}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:border-slate-300"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onContact?.('MAP');
+                }}
+                className={btnBase}
               >
                 Map
               </a>
+
+              {emailHref ? (
+                <a
+                  href={emailHref}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onContact?.('EMAIL');
+                  }}
+                  className={btnBase}
+                >
+                  Email
+                </a>
+              ) : (
+                <span className={[btnBase, btnDisabled].join(' ')}>Email</span>
+              )}
             </div>
           </div>
         </div>
